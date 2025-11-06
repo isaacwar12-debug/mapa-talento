@@ -1,0 +1,1 @@
+# Núcleo de la Appstreamlit# Manejo de datospandasopenpyxl  # Necesario para que pandas lea/escriba Excel (App 1)# Conexión con Googlegspreadgspread_dataframegoogle-api-python-clientgoogle-auth-oauthlib# Lectura de CVs (App 1)PyPDF2python-docx  
