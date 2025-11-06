@@ -5,6 +5,7 @@ import time
 import os
 import warnings
 import io
+import json # Importante para leer los secretos
 
 # --- INICIO: IMPORTS PARA GOOGLE (OAuth) ---
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -14,16 +15,46 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 # --- FIN: IMPORTS PARA GOOGLE ---
 
+
+# --- ★★★ INICIO: BLOQUE PARA DESPLIEGUE EN STREAMLIT CLOUD ★★★ ---
+# (Este es el código que hemos añadido para leer los "Secrets")
+
+# Nombres de los archivos que la app espera encontrar
+CLIENT_SECRETS_FILE = "client_secrets.json"
+TOKEN_FILE = "token.json"
+
+# Comprobar si estamos en Streamlit Cloud (buscando los secretos)
+if st.secrets.get("GOOGLE_CLIENT_SECRETS"):
+    
+    # Si estamos en la nube y el archivo NO existe...
+    if not os.path.exists(CLIENT_SECRETS_FILE):
+        # ...crear el archivo 'client_secrets.json' a partir del secreto
+        with open(CLIENT_SECRETS_FILE, "w") as f:
+            # Escribimos el TEXTO del secreto (que guardamos con """...""")
+            f.write(st.secrets["GOOGLE_CLIENT_SECRETS"])
+            
+    # Si estamos en la nube y el archivo NO existe...
+    if not os.path.exists(TOKEN_FILE):
+        # ...crear el archivo 'token.json' a partir del secreto
+        with open(TOKEN_FILE, "w") as f:
+            # Escribimos el TEXTO del secreto (que guardamos con """...""")
+            f.write(st.secrets["GOOGLE_TOKEN"])
+
+# --- ★★★ FIN: BLOQUE PARA DESPLIEGUE EN STREAMLIT CLOUD ★★★ ---
+
+
 # Ignorar advertencias comunes
 warnings.filterwarnings('ignore', category=FutureWarning)
 
 # ========== CONFIGURACIÓN ==========
 class Config:
     # 1. El JSON que descargaste de "ID de cliente de OAuth"
-    GDRIVE_CREDENTIALS_FILE = "client_secrets.json" # <-- REEMPLAZA ESTO
+    # (Ahora se crea automáticamente en la nube desde los 'secrets')
+    GDRIVE_CREDENTIALS_FILE = "client_secrets.json" 
     
     # 2. El token que creaste con auth.py
-    GDRIVE_TOKEN_FILE = "token.json" # <-- DEBE COINCIDIR CON EL CREADO
+    # (Ahora se crea automáticamente en la nube desde los 'secrets')
+    GDRIVE_TOKEN_FILE = "token.json"
     
     # 3. El nombre EXACTO de tu Google Sheet
     GSHEET_NAME = "BaseDeDatos_TalentHub" # <-- REEMPLAZA ESTO
@@ -69,18 +100,21 @@ def get_google_creds(token_file):
     if os.path.exists(token_file):
         creds = Credentials.from_authorized_user_file(token_file, SCOPES)
     else:
+        # Este error ahora solo debería aparecer en local si borras el token
         st.error(f"Error: No se encuentra el archivo de sesión '{token_file}'.")
-        st.info("Por favor, ejecuta 'python auth.py' en tu terminal primero para autenticarte.")
+        st.info("Asegúrate de que tus 'Secrets' de Streamlit Cloud están bien configurados.")
         return None
     
     # Refrescar si está caducado
     if creds and creds.expired and creds.refresh_token:
         try:
             creds.refresh(Request())
-            with open(token_file, 'w') as token:
-                token.write(creds.to_json())
+            # Guardar el token refrescado (solo en local)
+            if os.access('.', os.W_OK): # Comprobar si tenemos permisos de escritura
+                with open(token_file, 'w') as token:
+                    token.write(creds.to_json())
         except Exception as e:
-            st.error(f"Error al refrescar el token: {e}. Ejecuta 'python auth.py' de nuevo.")
+            st.error(f"Error al refrescar el token: {e}. Vuelve a autenticarte localmente o revisa los 'Secrets'.")
             return None
     
     return creds
@@ -154,7 +188,7 @@ def mover_candidato(candidato_archivo, nuevo_estado):
     except Exception as e:
         st.error(f"Error al mover candidato: {e}")
 
-# --- NUEVA FUNCIÓN: SUBIR ENTREVISTA ---
+# --- ★★★ INICIO: FUNCIÓN 'SUBIR ENTREVISTA' ARREGLADA ★★★ ---
 def subir_entrevista(candidato_archivo, archivo_subido):
     """Sube un informe de entrevista y lo asocia al candidato"""
     try:
@@ -163,10 +197,14 @@ def subir_entrevista(candidato_archivo, archivo_subido):
         # Conectar a Google Drive
         drive_service = build('drive', 'v3', credentials=creds)
         
+        # --- ARREGLO 1: Obtener el MIME type real del archivo ---
+        mime_type_real = archivo_subido.type
+        
         # Preparar metadatos del archivo
         file_metadata = {
             'name': f"Entrevista_{candidato_archivo}_{archivo_subido.name}",
-            'mimeType': 'application/pdf'
+            # --- ARREGLO 2: Usar el MIME type real ---
+            'mimeType': mime_type_real 
         }
         
         # Si se especificó una carpeta, usarla
@@ -176,8 +214,9 @@ def subir_entrevista(candidato_archivo, archivo_subido):
         # Convertir el archivo subido a bytes
         file_bytes = archivo_subido.getvalue()
         media = MediaIoBaseUpload(io.BytesIO(file_bytes), 
-                                mimetype='application/pdf',
-                                resumable=True)
+                                  # --- ARREGLO 3: Usar el MIME type real ---
+                                  mimetype=mime_type_real,
+                                  resumable=True)
         
         # Subir archivo a Google Drive
         file = drive_service.files().create(
@@ -216,6 +255,9 @@ def subir_entrevista(candidato_archivo, archivo_subido):
         
     except Exception as e:
         st.error(f"❌ Error subiendo entrevista: {e}")
+
+# --- ★★★ FIN: FUNCIÓN 'SUBIR ENTREVISTA' ARREGLADA ★★★ ---
+
 
 # ========== INTERFAZ "MODO CARRERA" ==========
 
@@ -422,7 +464,8 @@ def main_portal():
         st.session_state.google_creds_valid = True
         st.rerun()
     if not st.session_state.google_creds_valid:
-         st.info("Por favor, completa la autenticación de Google en la terminal (consola) para continuar.")
+         st.error("Error de autenticación: No se pudieron cargar las credenciales.")
+         st.info("Asegúrate de que los 'Secrets' de Google en Streamlit Cloud están configurados correctamente.")
          return
          
     worksheet = connect_to_gsheet(creds)
@@ -461,9 +504,8 @@ def main_portal():
 
     # --- NUEVO: Información sobre entrevistas ---
     st.sidebar.markdown("---")
-    st.sidebar.markdown("**💡 Funcionalidades nuevas:**")
-    st.sidebar.markdown("• **Subir entrevistas** en fases: 🗓️ Agendar, 🎤 Entrevistado, ✅ Aceptado")
-    st.sidebar.markdown("• **Ver todos los informes** en cada candidato")
+    st.sidebar.markdown("💡 **Funcionalidad nueva:**")
+    st.sidebar.markdown("• **Subir entrevistas** en fases: 🗓️, 🎤, ✅")
     
     # --- 4. Aplicar Filtros (lógica principal) ---
     
